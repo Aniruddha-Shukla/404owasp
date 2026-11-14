@@ -46,10 +46,11 @@ so refreshing or sharing a link to any page works.
 | **Pipeline in 3D**: a pinned scroll story where the five status layers rotate and pull apart, one stage at a time | bottom of Overview |
 | Hover polish: rolling-letter links, sliding nav pill, magnetic buttons, cursor ring, card glow, confetti on an offer | everywhere (off on touch and with reduced motion) |
 
-**Resume files stay in the browser.** They are stored in IndexedDB and never sent to the server, so
-there is no upload endpoint to attack. Files are checked by extension, size (2 MB) and real file
-signature (PDF, DOCX and DOC headers), are only ever downloaded (never rendered), and the file name
-is shown as plain text.
+**Resume files are stored in the database**, under your account (or your browser's private workspace if you are not
+signed in), so a database manager can find and export them (see [Database](#database)). Every upload is re-checked on
+the server: extension, size (2 MB) and the real file signature (PDF, DOCX and DOC headers), so a renamed file is
+refused. Files are only ever **downloaded**, never opened in the page, the file name is cleaned and shown as plain
+text, and only the owner can list, download or delete a file.
 
 The UI follows the Stitch "editorial job tracker" design (coral light theme, electric-blue dark
 theme, with a toggle). Fonts are bundled from npm (`@fontsource-variable/*`), so the page loads
@@ -112,15 +113,17 @@ MongoDB Atlas.
 | `workspaces` | browser, or signed-in account (`_id` = `u_<user id>`) | `{ _id, applications: [ ...records ], updatedAt }`: the internship applications (at most 200) | 14 days after the last change |
 | `users` | account | `{ _id, email, name, passwordHash, createdAt }`: the login credentials. `passwordHash` is a salted scrypt hash, never the password | never |
 | `sessions` | signed-in browser | `{ _id: sha256(cookie), userId, email, name, createdAt, expiresAt }`: who is logged in | 14 days (TTL index) |
+| `resumes` | owner + resume version | `{ _id: "<owner>|<version>", workspace, version, name, size, contentType, sha256, uploadedAt, data }`: the uploaded resume file (`data` is binary, at most 2 MB, 20 per owner) | 14 days after upload (TTL index) |
 
-Indexes: unique on `users.email`, TTL on `sessions.expiresAt` and `workspaces.updatedAt`.
+Indexes: unique on `users.email`; TTL on `sessions.expiresAt`, `workspaces.updatedAt` and `resumes.uploadedAt`; `resumes.workspace`.
+An application links to its resume by `resumeVersion` (the label) plus the owner (`workspace`).
 Record fields are in `backend/src/types.js`. Which database is used: `MONGODB_URI` first, then Upstash Redis
 (`KV_REST_API_*`, workspaces only), then memory. Accounts are durable only with MongoDB.
 
 ### How to look at it
 
 - **Atlas (easiest):** https://cloud.mongodb.com → your project → **Database → Browse Collections** → database
-  `nextup` → pick `users`, `sessions` or `workspaces`. Use the filter box, for example `{ "email": "you@example.com" }`.
+  `nextup` → pick `users`, `sessions`, `workspaces` or `resumes`. Use the filter box, for example `{ "email": "you@example.com" }`.
 - **MongoDB Compass** (desktop app): connect with the same connection string.
 - **Terminal:**
   ```bash
@@ -131,9 +134,17 @@ Record fields are in `backend/src/types.js`. Which database is used: `MONGODB_UR
   db.workspaces.find({ _id: /^u_/ })                     // signed-in users' data
   db.workspaces.findOne({ _id: "u_<a user id>" }).applications
   db.sessions.find({}, { _id: 0, email: 1, expiresAt: 1 })   // who is signed in right now
+  db.resumes.find({}, { data: 0 })                       // every uploaded resume's details (without the file bytes)
+  ```
+- **Resume files:** Atlas shows a resume's details (owner, version, file name, size, hash, upload time) but cannot open the file
+  itself. Use the export script, which lists every resume with its owner's email and saves the real files:
+  ```bash
+  cd backend
+  MONGODB_URI="mongodb+srv://..." npm run export-resumes              # saves to ./exported-resumes/<owner>/<version> - <file name>
+  MONGODB_URI="mongodb+srv://..." npm run export-resumes -- --list    # list only
   ```
 - **As a user:** sign in, click your avatar, then **Download my data**. It returns exactly what is stored about you
-  (account details and applications, never the password hash).
+  (account details, applications and a list of your resumes, never the password hash). Download a resume from the Resume Lab.
 
 ### Run it locally against MongoDB
 
@@ -158,6 +169,7 @@ stored in MongoDB, otherwise in memory.
 | `POST /api/auth/logout` | ends the session |
 | `GET /api/auth/me` | the signed-in user, or `{ "user": null }` |
 | `GET /api/me/data` | everything stored about you (signed in) |
+| `GET/PUT/DELETE /api/resumes[/:version]` | list, upload (raw bytes, `?name=`), download and delete your resume files |
 
 How it is kept safe:
 - **Passwords** are hashed with scrypt (built into Node) and a random salt per user. The plain password is never stored or logged.
@@ -229,6 +241,9 @@ backend/   Express 5, JavaScript ES modules (runs directly on Node, no build ste
   src/auth.js        optional accounts: register, login, logout, sessions, cross-site check
   src/auth-store.js  users + sessions in memory or MongoDB
   src/passwords.js   scrypt password hashing
+  src/resumes.js     resume upload / download API and the server-side file checks
+  src/resume-store.js resume files in memory or MongoDB
+  scripts/export-resumes.js  list and export every stored resume (for a database manager)
   src/persistence.js picks a database from the environment: MongoDB, else Upstash Redis, else memory
   src/vercel.js      serverless entry point for Vercel
 vercel.json       Vercel config (frontend + backend services)
@@ -236,7 +251,7 @@ frontend/  Vite + React, JavaScript (JSX) (see FRONTEND_SPEC.md)
   src/App.jsx        app shell: navigation, shared state, data loading, toasts, actions
   src/router.jsx     tiny History-API router (real URLs, Back/Forward, no dependency)
   src/pages/         Overview (/), Applications, Deadlines, Insights, Resume Lab
-  src/resumeStore.js local resume vault (IndexedDB, never uploaded)
+  src/resumeStore.js resume vault client (talks to /api/resumes)
   src/fx.js          pointer effects, scroll engine (reveals, depth, pinning), confetti
   src/fx.css         menu, palette, board, timeline, resume, account and hover styles
   src/ui/AuthDialog.jsx  sign in / create account / your account
@@ -256,7 +271,7 @@ frontend/  Vite + React, JavaScript (JSX) (see FRONTEND_SPEC.md)
 | Insecure design | All validation happens on the server. Only known fields are accepted, so a client can't set `id`, `history` or `createdAt` |
 | Resource abuse | 20 kB body limit, 200 applications per workspace, 500 workspaces, 600 requests/min per IP |
 | Misconfiguration | Security headers (`nosniff`, frame denial, no referrer). `X-Powered-By` is off. No stack traces are sent to clients |
-| Untrusted files | Resumes never leave the browser (no upload endpoint). Type, size and file signature are validated, files are only downloaded, never opened or rendered |
+| Untrusted files | Resume uploads are re-validated on the server: extension, 2 MB limit, real file signature, cleaned file name, 20 per owner, rate limited. Files are served only as `attachment` downloads (with `nosniff`), never rendered, and only the owner can read or delete them |
 | Secrets & privacy | No secrets in the repo (`MONGODB_URI` lives only in the host's environment; `.env` files are git-ignored), no external calls, no tracking. All demo data is fictional (`.example` domains) |
 
 ## Known limits

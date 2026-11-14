@@ -97,7 +97,7 @@ export function AuthDialog({ user, onClose, onAuthed, onSignOut, notify }) {
             <p>
               {user
                 ? 'Your applications are saved to this account and follow you to any browser.'
-                : 'Optional. Sign in to keep your data across devices. Without an account, it stays in this browser.'}
+                : 'Optional. Sign in to keep your data across devices. Without an account, it is tied to this browser.'}
             </p>
           </div>
           <button type="button" className="icon-btn" onClick={onClose} aria-label="Close">

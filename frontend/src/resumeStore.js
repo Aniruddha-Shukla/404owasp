@@ -1,37 +1,17 @@
-// Resume vault. Files live in this browser's IndexedDB and are NEVER sent to the server:
-// no upload endpoint, no accounts, nothing to leak. One file per resume version label.
+// Resume vault, backed by the API. Files are saved in the database (MongoDB) under the signed-in account, or under
+// this browser's workspace when signed out. The server re-checks every file; the checks here only give quick feedback.
+// One file per resume version label.
 
 import { useCallback, useEffect, useState } from 'react'
+import { api } from './api'
 
 export const RESUME_MAX_BYTES = 2 * 1024 * 1024
 export const RESUME_ACCEPT = '.pdf,.doc,.docx'
 
-const DB_NAME = 'nextup-resumes'
-const STORE = 'files'
 const CHANGED = 'nextup:resumes'
 
-function openDb() {
-  return new Promise((resolve, reject) => {
-    if (typeof indexedDB === 'undefined') return reject(new Error('Resume storage is not available in this browser mode'))
-    const req = indexedDB.open(DB_NAME, 1)
-    req.onupgradeneeded = () => req.result.createObjectStore(STORE, { keyPath: 'version' })
-    req.onsuccess = () => resolve(req.result)
-    req.onerror = () => reject(req.error ?? new Error('Could not open resume storage'))
-  })
-}
-
-async function run(mode, work) {
-  const db = await openDb()
-  try {
-    return await new Promise((resolve, reject) => {
-      const req = work(db.transaction(STORE, mode).objectStore(STORE))
-      req.onsuccess = () => resolve(req.result)
-      req.onerror = () => reject(req.error ?? new Error('Resume storage failed'))
-    })
-  } finally {
-    db.close()
-  }
-}
+/** Ask every list on screen to reload (after an upload, a delete, or signing in or out). */
+export const refreshResumes = () => window.dispatchEvent(new Event(CHANGED))
 
 const startsWith = (bytes, sig) => sig.every((b, i) => bytes[i] === b)
 
@@ -50,52 +30,35 @@ export async function validateResume(file) {
   return ok ? null : `That doesn't look like a real .${ext} file`
 }
 
-const cleanName = (name) =>
-  name
-    .replace(/[\u0000-\u001f\u007f<>:"/\\|?*]/g, '')
-    .trim()
-    .slice(0, 80) || 'resume'
-
 export async function putResume(version, file) {
   const problem = await validateResume(file)
   if (problem) throw new Error(problem)
-  const record = { version, name: cleanName(file.name), size: file.size, addedAt: Date.now(), blob: file }
-  await run('readwrite', (s) => s.put(record))
-  window.dispatchEvent(new Event(CHANGED))
+  await api.putResume(version, file)
+  refreshResumes()
 }
 
 export async function deleteResume(version) {
-  await run('readwrite', (s) => s.delete(version))
-  window.dispatchEvent(new Event(CHANGED))
+  await api.deleteResume(version)
+  refreshResumes()
 }
 
-export const listResumes = () => run('readonly', (s) => s.getAll())
-
-/** Saves the file through the browser's normal download flow. It is never opened or rendered. */
-export function downloadResume(file) {
-  const url = URL.createObjectURL(file.blob)
-  const a = document.createElement('a')
-  a.href = url
-  a.download = file.name
-  a.click()
-  setTimeout(() => URL.revokeObjectURL(url), 1000)
-}
+export const downloadResume = (file) => api.downloadResume(file.version, file.name)
 
 export const formatSize = (bytes) =>
   bytes < 1024 * 1024 ? `${Math.max(1, Math.round(bytes / 1024))} KB` : `${(bytes / 1024 / 1024).toFixed(1)} MB`
 
-/** All stored resumes, kept in sync across the form and the Resume Lab. */
+/** All stored resumes (details only, not the files), kept in sync across the form and the Resume Lab. */
 export function useResumes() {
   const [files, setFiles] = useState([])
   const [error, setError] = useState('')
 
   const refresh = useCallback(() => {
-    listResumes().then(
+    api.listResumes().then(
       (all) => {
-        setFiles(all)
+        setFiles(all.map((r) => ({ ...r, addedAt: Date.parse(r.uploadedAt) })))
         setError('')
       },
-      (e) => setError(e instanceof Error ? e.message : 'Resume storage failed'),
+      (e) => setError(e instanceof Error ? e.message : 'Could not load your resumes'),
     )
   }, [])
 

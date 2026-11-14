@@ -104,7 +104,7 @@ export function AppForm({ editing, resumeVersions, onClose, onSaved }) {
       if (pendingResume) {
         try {
           await putResume(saved.resumeVersion, pendingResume)
-          note = `resume ${saved.resumeVersion} stored in this browser`
+          note = `resume ${saved.resumeVersion} saved to your workspace`
         } catch (e) {
           note = `but the resume wasn't stored (${e instanceof Error ? e.message : 'storage error'})`
         }
@@ -268,7 +268,7 @@ export function AppForm({ editing, resumeVersions, onClose, onSaved }) {
                 Resume file <span className="optional">optional</span>
               </span>
               <span className="counter">
-                <Icon name="lock" size={12} /> stays in this browser · never uploaded
+                <Icon name="lock" size={12} /> saved to your workspace · only you can download it
               </span>
             </div>
             {pendingResume ? (
@@ -285,7 +285,7 @@ export function AppForm({ editing, resumeVersions, onClose, onSaved }) {
                     name={storedResume.name}
                     size={storedResume.size}
                     tag={`already on file for ${storedResume.version}`}
-                    onDownload={() => downloadResume(storedResume)}
+                    onDownload={() => void downloadResume(storedResume).catch(() => setFormError('Could not download that file'))}
                   />
                 )}
                 <DropZone

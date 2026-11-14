@@ -65,6 +65,22 @@ async function json(method, path, body) {
   return res.status === 204 ? undefined : await res.json()
 }
 
+/** Like send(), but for file bytes: no JSON headers, no ?today=. */
+async function sendRaw(method, url, { body, headers } = {}) {
+  const res = await fetch(url, { method, headers: { 'X-Workspace-Id': workspaceId(), ...headers }, body })
+  if (!res.ok) {
+    const data = await res.json().catch(() => ({}))
+    throw new ApiError(
+      res.status,
+      data.error ?? data.errors?.version ?? `The server had a problem (${res.status}). Try again.`,
+      data.errors,
+    )
+  }
+  return res
+}
+
+const resumeUrl = (version) => `/api/resumes/${encodeURIComponent(version)}`
+
 const item = (id) => `/applications/${encodeURIComponent(id)}`
 
 export const api = {
@@ -84,6 +100,25 @@ export const api = {
   register: (fields) => json('POST', '/auth/register', fields),
   login: (fields) => json('POST', '/auth/login', fields),
   logout: () => json('POST', '/auth/logout'),
+
+  // ----- resume files, stored in the database under your account (or this browser's workspace) -----
+  listResumes: async () => (await (await sendRaw('GET', '/api/resumes')).json()).resumes,
+  putResume: (version, file) =>
+    sendRaw('PUT', `${resumeUrl(version)}?name=${encodeURIComponent(file.name)}`, {
+      body: file,
+      headers: { 'Content-Type': 'application/octet-stream' },
+    }),
+  deleteResume: (version) => sendRaw('DELETE', resumeUrl(version)),
+  /** Saves the file through the browser's normal download flow. It is never opened or rendered. */
+  async downloadResume(version, name) {
+    const blob = await (await sendRaw('GET', resumeUrl(version))).blob()
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement('a')
+    a.href = url
+    a.download = name
+    a.click()
+    setTimeout(() => URL.revokeObjectURL(url), 1000)
+  },
 
   /** Downloads everything stored about the signed-in user, as a JSON file. */
   async downloadMyData() {

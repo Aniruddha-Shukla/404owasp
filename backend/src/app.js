@@ -6,6 +6,8 @@ import { attachUser, authRouter, sameOrigin } from './auth.js'
 import { createMemoryAuthStore } from './auth-store.js'
 import { isValidISODate, serverToday } from './dates.js'
 import { toICS } from './ics.js'
+import { createMemoryResumeStore } from './resume-store.js'
+import { resumeRouter } from './resumes.js'
 import { buildDashboard, present } from './rules.js'
 
 import { rateLimit, securityHeaders, workspaceFrom } from './security.js'
@@ -31,6 +33,8 @@ export function createApp({
   persistence = null,
   authStore = createMemoryAuthStore(),
   authAttemptsPerMinute = 30,
+  resumeStore = createMemoryResumeStore(),
+  resumeUploadsPerMinute = 30,
   ...storeOptions
 } = {}) {
   const store = createStore(storeOptions)
@@ -44,6 +48,7 @@ export function createApp({
   app.use('/api', sameOrigin)
   app.use('/api', attachUser(authStore))
   app.use('/api/auth', authRouter({ authStore, attemptsPerMinute: authAttemptsPerMinute }))
+  app.use('/api/resumes', resumeRouter({ resumeStore, uploadsPerMinute: resumeUploadsPerMinute }))
 
   // Serverless hosts may answer each request from a different process, so a workspace is loaded
   // from the database before the request and saved right before the response goes out.
@@ -93,6 +98,7 @@ export function createApp({
         user: { id: req.user.id, email: req.user.email, name: req.user.name || undefined, createdAt: account?.createdAt },
         workspaceId: ctx.ws,
         applications: store.list(ctx.ws, ctx.today),
+        resumes: await resumeStore.list(ctx.ws), // file details only; download the file itself from /api/resumes/:version
       })
     } catch (err) {
       next(err)
@@ -237,6 +243,10 @@ export function createApp({
     }
     if (err.type === 'entity.too.large') {
       res.status(413).json({ error: 'Request body is too large' })
+      return
+    }
+    if (err.status === 400) {
+      res.status(400).json({ error: 'Bad request' }) // e.g. a malformed %-escape in the URL
       return
     }
     console.error(err)

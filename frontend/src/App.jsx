@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { api } from './api'
 import { Icon } from './icons'
+import { refreshResumes } from './resumeStore'
 
 import { confetti, usePointerFx, useScrollFx } from './fx'
 import { ApplicationsPage } from './pages/Applications'
@@ -126,6 +127,7 @@ export default function App() {
     setFilter('all')
     setQuery('')
     await reload() // the data now comes from the account's workspace
+    refreshResumes()
     showToast(
       created ? `Welcome${signedIn.name ? `, ${signedIn.name}` : ''}! Your account is ready` : `Signed in as ${signedIn.email}`,
     )
@@ -140,6 +142,7 @@ export default function App() {
     setAuthOpen(false)
     setUser(null)
     await reload() // back to this browser's own workspace
+    refreshResumes()
     showToast('Signed out')
   }
 
@@ -279,7 +282,7 @@ export default function App() {
   const exportIcs = () => void api.downloadCalendar().catch((e) => showToast(errorText(e), { tone: 'error' }))
   const resetDemo = () => void mutate(api.resetDemo, () => showToast('Demo data reloaded'))
   const wipeAll = () => {
-    if (window.confirm('Delete every application in this browser? This cannot be undone.')) {
+    if (window.confirm('Delete every application in your workspace? This cannot be undone.')) {
       void mutate(api.wipeAll, () => showToast('All data wiped'))
     }
   }

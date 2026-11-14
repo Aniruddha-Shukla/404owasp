@@ -12,7 +12,6 @@ flowchart LR
     SPA["React SPA<br/>App shell, router, pages, UI"]
     API["api.js<br/>fetch client"]
     LS[("localStorage<br/>workspace id, theme, view")]
-    IDB[("IndexedDB<br/>resume files")]
   end
   subgraph Server["Express 5 API (Node)"]
     PIPE["Middleware pipeline"]
@@ -24,7 +23,6 @@ flowchart LR
 
   SPA --> API
   SPA --- LS
-  SPA --- IDB
   API -- "HTTP /api/*<br/>X-Workspace-Id + ?today=" --> PIPE
   PIPE --> ROUTES
   ROUTES --> RULES
@@ -32,7 +30,7 @@ flowchart LR
   PIPE -. "load / save workspace<br/>(when a database is set)" .-> DB
 ```
 
-Resume files never reach the server: they are stored in IndexedDB only.
+Resume files are uploaded to the API and stored in the database (MongoDB `resumes` collection), under the account or browser workspace that owns them.
 
 ## 2. Frontend (Vite, React 19, JavaScript)
 
@@ -68,8 +66,9 @@ flowchart TD
   PAGES --> UI["ui/: Card, Board, Timeline, PinScene,<br/>Ticker, NextUp, SummaryTiles ..."]
 
   ACTIONS --> APICLIENT["api.js<br/>X-Workspace-Id, ?today=, ApiError"]
-  RES --> RSTORE["resumeStore.js<br/>IndexedDB vault"]
+  RES --> RSTORE["resumeStore.js<br/>uploads via the API"]
   FORM --> RSTORE
+  RSTORE --> BACKEND
   APP --> FX["fx.js: pointer effects,<br/>scroll engine, confetti"]
   APICLIENT --> BACKEND(("Express /api"))
 ```
@@ -82,7 +81,7 @@ and the whole `Dashboard` object replaces state. Pages are pure views of that ob
 |---|---|
 | Routing | `router.jsx`: `useRouter`, `Link`, `RouterContext`. Real URLs, Back/Forward, deep links |
 | API contract | `types.js` (constants + JSDoc typedefs, mirrors `backend/src/types.js`), `api.js` |
-| Resume vault | `resumeStore.js`: IndexedDB, type, size and file-signature checks, download only |
+| Resume vault | `resumeStore.js`: quick client checks, then `PUT /api/resumes/:version`; the server re-validates and stores the file; download only |
 | Scroll and hover effects | `fx.js` (+ `fx.css`): reveals, depth tilt, pinned 3D scene, magnetic buttons, cursor ring |
 | Theme | `data-theme` on `<html>`; saved only after an explicit toggle |
 
@@ -131,6 +130,7 @@ flowchart TD
 | POST | `/api/auth/logout` | end the session |
 | GET | `/api/auth/me` | the signed-in user, or `null` |
 | GET | `/api/me/data` | everything stored about the signed-in user |
+| GET, PUT, DELETE | `/api/resumes`, `/api/resumes/:version` | list, upload (raw bytes), download and delete the owner's resume files |
 
 Every request carries `X-Workspace-Id` (random id kept in the browser) and `?today=YYYY-MM-DD`
 (the browser's local date), so the server never guesses the day.
@@ -213,7 +213,7 @@ erDiagram
 | Server memory (default) | JavaScript `Map` | workspace id to `ApplicationRecord[]`. 200 records per workspace, 500 workspaces |
 | MongoDB (optional) | `mongodb` driver, set by `MONGODB_URI` | database `nextup`, collection `workspaces`: one document per workspace `{ _id, applications[], updatedAt }`, TTL index removes it after 14 days |
 | Redis (optional) | Upstash over REST, if MongoDB is not set | `nextup:ws:<workspace-id>` = JSON array, expires after 14 days |
-| Browser | IndexedDB `nextup-resumes` / `files` | resume file per version label (never uploaded) |
+| MongoDB `resumes` (optional; memory otherwise) | one document per owner and resume version | `{ _id: "<owner>|<version>", workspace, version, name, size, contentType, sha256, uploadedAt, data (binary, max 2 MB) }`, TTL index removes it after 14 days |
 | Browser | localStorage | `nextup:workspace`, `nextup:theme`, `nextup:view` |
 | MongoDB `users` | one document per account | `{ _id, email (unique), name, passwordHash (scrypt), createdAt }` |
 | MongoDB `sessions` | one document per login | `{ _id: sha256(cookie token), userId, email, name, createdAt, expiresAt }`, TTL index removes expired ones |
@@ -278,6 +278,6 @@ sequenceDiagram
 | Broken access control | per-browser workspace id, or a per-account workspace when signed in; clients can only set allow-listed fields (never `id`, `history`, `createdAt`) |
 | Authentication | scrypt-hashed passwords with per-user salt; random session token in an HttpOnly, SameSite=Lax cookie, only its hash stored; generic login error, equal timing, rate limit; `Origin` check on state changes |
 | Input abuse | all validation on the server; 20 kB body limit; 200 records per workspace; 600 requests per minute per IP |
-| Unsafe files | resumes stay in the browser; type, size and file signature checked; download only, never rendered |
+| Unsafe files | resume uploads re-validated on the server (extension, 2 MB, real file signature, cleaned name, 20 per owner, rate limited); served only as `attachment` downloads with `nosniff`; only the owner can read or delete |
 | Misconfiguration | security headers on every response; no stack traces to clients; `X-Powered-By` off |
 | Secrets | none in the repo; the database connection string (`MONGODB_URI`) only as a Vercel environment variable, and `.env` files are git-ignored |

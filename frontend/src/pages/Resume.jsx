@@ -36,14 +36,14 @@ export function ResumePage({ data, notify }) {
     const v = label.trim() || 'v1-general'
     try {
       await putResume(v, file)
-      notify(`Resume ${v} saved in this browser`)
+      notify(`Resume ${v} saved`)
     } catch (e) {
       notify(e instanceof Error ? e.message : 'Could not save the resume', 'error')
     }
   }
 
   async function remove(f) {
-    if (!window.confirm(`Remove ${f.name} from this browser?`)) return
+    if (!window.confirm(`Delete ${f.name}? This removes it from the database.`)) return
     try {
       await deleteResume(f.version)
       notify(`Removed ${f.name}`)
@@ -65,7 +65,7 @@ export function ResumePage({ data, notify }) {
             <Icon name="upload" size={18} className="accent" /> Add or replace a resume
           </h2>
           <span className="privacy-chip">
-            <Icon name="lock" size={14} /> Stored in this browser only · never uploaded
+            <Icon name="lock" size={14} /> Saved to your workspace · only you can download it
           </span>
         </div>
         <div className="lab-drop-body">
@@ -144,7 +144,11 @@ export function ResumePage({ data, notify }) {
                   name={r.file.name}
                   size={r.file.size}
                   tag={new Date(r.file.addedAt).toLocaleDateString('en-GB', { day: 'numeric', month: 'short' })}
-                  onDownload={() => downloadResume(r.file)}
+                  onDownload={() =>
+                    void downloadResume(r.file).catch((e) =>
+                      notify(e instanceof Error ? e.message : 'Could not download that file', 'error'),
+                    )
+                  }
                   onRemove={() => void remove(r.file)}
                 />
               ) : (
